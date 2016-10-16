@@ -4,13 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "es6-promise": "^3.2.1",
-    "node-fetch": "^1.5.3",
-    "ramda": "^0.21.0"
+    "bluebird": "^3.4.6",
+    "co": "^4.6.0",
+    "node-fetch": "^1.6.3",
+    "ramda": "^0.22.1"
   }
 }

@@ -1,129 +1,107 @@
-'use strict';
+'use strict'
 
-// To get initial auth token go to:
-// https://accounts.spotify.com/authorize?client_id=<client_id>&response_type=code&redirect_uri=http%3A%2F%2Flocalhost:8000%2Fcallback&scope=playlist-modify-public
-// in browser while the below server is running and you'll get it printed out.
-// require('http').createServer( (req, res) => console.log(req.url.split('code=')[1]) ).listen(8000);
+/* eslint-disable no-console */
 
-// For 'node-fetch'
-require('es6-promise').polyfill();
+const R     = require('ramda')
+const co    = require('co')
+const fetch = require('node-fetch')
 
-let R     = require('ramda');
-let fs    = require('fs');
-let fetch = require('node-fetch');
+const f = require(`${__dirname}/fns.js`)
 
-let config = require('./config.json');
-
-let auth = {
-  // These files are updated programmatically by the refresh function.
-  token:   require('./auth.json').access_token,
-  refresh: require('./refresh.json').refresh_token
-};
-
-// Execution
-testApi()
-.then(gatherAllSongs)
-.then( R.pipe( getNewestSongs, getUris, overwritePlaylist ) );
-//
-
-
-function testApi() {
-  return fetch('https://api.spotify.com/v1/me',
-    {
-      headers: {
-        Authorization: `Bearer ${auth.token}`
-      }
-    }
-  )
-  .then( res => res.status === 200 ? Promise.resolve() : refreshTokens() )
-  .catch( err => console.log(err) );
-}
-
-// Necessary as access token only last for an hour.
-function refreshTokens() {
-  let form = `grant_type=refresh_token&refresh_token=${auth.refresh}`;
-
-  return fetch('https://accounts.spotify.com/api/token',
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${config.basicAuth}`, // Base64 encoded spotify <client_id>:<client_secret>.
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: form
-    }
-  )
-  .then( res => res.json() )
-  .then( json => {
-
-    if (json.refresh_token) {
-      let data = JSON.stringify({
-        refresh_token: json.refresh_token
-      });
-      fs.writeFileSync('./refresh.json', data);
-    }
-
-    auth.token = auth.token;
-    fs.writeFileSync('./auth.json', JSON.stringify(json));
-  })
-  .catch( err => console.log(err) );
-}
-
-function gatherAllSongs() {
-
-  return go(0, []);
-
-  function go(offset, songs) {
-
-    return fetch(`https://api.spotify.com/v1/users/${config.userId}/playlists/${config.sourcePlaylist}/tracks?offset=${offset}`,
-      {
-        headers: {
-          Authorization: `Bearer ${auth.token}`
-        }
-      }
+// Accepts validation function that will only return
+// command line userInput when it returns truthy.
+const userInput = fn =>
+  new Promise( (resolve, reject) => {
+    process.stdin.setEncoding('utf8')
+    // TODO Still not behaving correctly. Need to deregister listeners maybe.
+    process.stdin.once(
+      'data',
+      R.pipe(
+        R.dropLast(1), // remove line break
+        txt => fn(txt)
+          ? resolve(txt)
+          : console.log('Try again!')
+      )
     )
-    .then( res => res.json() )
-    .then( json => {
+  })
 
-      let results = json.items;
+const exit = msg => { console.log(msg); process.exit() }
 
-      songs.push.apply(songs, results);
-      //songs = R.concat(songs, r   
+const logOption = (val, index) => console.log(`${index}) ${val.name}`)
 
-      // Response contains a max of 100 songs, hence the recursion.
-      return results.length < 100 ? songs : go(offset + 100, songs);
+// Begin execution.
+co(function*() {
 
-    })
-    .catch( err => console.log(err) );
+  const config      = yield f.readJson(`${__dirname}/config.json`)
+  const savedTokens = yield f.readJson(`${__dirname}/tokens.json`)
 
-  }
-
-}
-
-function getNewestSongs(songs) {
-  let toTimestamp  = d => new Date(d).getTime();
-  let sortByNewest = R.sortBy(R.pipe(R.prop('added_at'), toTimestamp));
-  let newestTracks = n => R.pipe(sortByNewest, R.takeLast(n));
-  let newestTwenty = newestTracks(20);
-
-  return newestTwenty(songs);
-}
-
-function getUris(songs) {
-  let getUri = R.pipe(R.prop('track'), R.prop('uri'));
-
-  return R.map(getUri, songs);
-}
-
-function overwritePlaylist(uris) {
-  return fetch(`https://api.spotify.com/v1/users/${config.userId}/playlists/${config.targetPlaylist}/tracks?uris=${R.join(',', uris)}`,
+  // Test call to check validity of current access token.
+  const validTokens = yield fetch(
+    'https://api.spotify.com/v1/me',
     {
-      method: 'PUT',
       headers: {
-        Authorization: `Bearer ${auth.token}`
+        Authorization: `Bearer ${savedTokens.access_token}`
       }
     }
   )
-  .then( res => console.log('Done!') )
-  .catch( err => console.log(err) );
-}
+  .then(
+    res => res.status === 200
+      ? savedTokens
+      : f.getNewTokens(
+          config.clientId,
+          config.clientSecret,
+          savedTokens.refresh_token
+        )
+  )
+
+  // Save the tokens.
+  f.writeJson(
+    `${__dirname}/tokens.json`,
+    // Unless a new refresh token has been sent back, retain the old one.
+    R.prop('refresh_token', validTokens)
+      ? validTokens
+      : R.assoc('refresh_token', savedTokens.refresh_token, validTokens)
+  )
+
+  const spotify = f.spotifyApi(config.userId, validTokens.access_token)
+
+  const options = [
+    { name: 'random', fn: songs => R.props( f.getRandomIndexes(config.count, songs.length), songs ) },
+    { name: 'recent', fn: songs => f.getMostRecentlyAdded(config.count, songs) }
+  ]
+
+  const playlists =
+    R.prop('items', yield spotify.getPlaylists() )
+
+  console.log('\nSelect source playlist:')
+  playlists.forEach(logOption)
+  const sourcePlaylist = playlists[ yield userInput( R.prop(R.__, playlists) ) ]
+
+  console.log('\nSelect option:')
+  options.forEach(logOption)
+  const option = options[ yield userInput( R.prop(R.__, options) ) ]
+
+  console.log('\nSelect target playlist:')
+  playlists.forEach(logOption)
+  const targetPlaylist = playlists[ yield userInput( R.prop(R.__, playlists) ) ]
+
+  const sourceSongs = yield spotify.getAllSongsFromPlaylist( sourcePlaylist.id, sourcePlaylist.owner.id )
+
+  const urisToApply =
+    R.map(R.path(['track', 'uri']), option.fn(sourceSongs))
+
+  console.log(`\nAre you sure you want to overwrite '${targetPlaylist.name}' with ${config.count} songs from '${sourcePlaylist.name}'? (yes/no)`)
+  return ( yield userInput( txt => txt === 'yes' || txt === 'no' ) ) === 'no'
+    ? '\nAborted!'
+    : yield spotify.overwritePlaylist(
+        urisToApply,
+        targetPlaylist.id
+      )
+      .then(
+        _ =>
+          '\nSuccess!'
+      )
+
+})
+.then(exit)
+.catch(exit)
