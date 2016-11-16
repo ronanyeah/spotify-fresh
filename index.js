@@ -6,34 +6,21 @@ const R     = require('ramda')
 const co    = require('co')
 const fetch = require('node-fetch')
 
-const f = require(`${__dirname}/fns.js`)
+const {
+  readJson, writeJson,
+  userInput, getFreshTokens, spotifyApi,
+  getMostRecentlyAdded, getRandomIndexes
+} = require(`${__dirname}/fns.js`)
 
-// Accepts validation function that will only return
-// command line userInput when it returns truthy.
-const userInput = fn =>
-  new Promise( (resolve, reject) => {
-    process.stdin.setEncoding('utf8')
-    // TODO Still not behaving correctly. Need to deregister listeners maybe.
-    process.stdin.once(
-      'data',
-      R.pipe(
-        R.dropLast(1), // remove line break
-        txt => fn(txt)
-          ? resolve(txt)
-          : console.log('Try again!')
-      )
-    )
-  })
-
-const exit = msg => { console.log(msg); process.exit() }
+const exit = msg => { console.log(msg); return process.exit() }
 
 const logOption = (val, index) => console.log(`${index}) ${val.name}`)
 
 // Begin execution.
 co(function*() {
 
-  const config      = yield f.readJson(`${__dirname}/config.json`)
-  const savedTokens = yield f.readJson(`${__dirname}/tokens.json`)
+  const config      = yield readJson(`${__dirname}/config.json`)
+  const savedTokens = yield readJson(`${__dirname}/tokens.json`)
 
   // Test call to check validity of current access token.
   const validTokens = yield fetch(
@@ -47,7 +34,7 @@ co(function*() {
   .then(
     res => res.status === 200
       ? savedTokens
-      : f.getNewTokens(
+      : getFreshTokens(
           config.clientId,
           config.clientSecret,
           savedTokens.refresh_token
@@ -55,7 +42,7 @@ co(function*() {
   )
 
   // Save the tokens.
-  f.writeJson(
+  writeJson(
     `${__dirname}/tokens.json`,
     // Unless a new refresh token has been sent back, retain the old one.
     R.prop('refresh_token', validTokens)
@@ -63,11 +50,11 @@ co(function*() {
       : R.assoc('refresh_token', savedTokens.refresh_token, validTokens)
   )
 
-  const spotify = f.spotifyApi(config.userId, validTokens.access_token)
+  const spotify = spotifyApi(config.userId, validTokens.access_token)
 
   const options = [
-    { name: 'random', fn: songs => R.props( f.getRandomIndexes(config.count, songs.length), songs ) },
-    { name: 'recent', fn: songs => f.getMostRecentlyAdded(config.count, songs) }
+    { name: 'random', fn: songs => R.props( getRandomIndexes(config.count, songs.length), songs ) },
+    { name: 'recent', fn: songs => getMostRecentlyAdded(config.count, songs) }
   ]
 
   const playlists =

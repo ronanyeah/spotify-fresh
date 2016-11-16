@@ -11,6 +11,7 @@
   "dependencies": {
     "bluebird": "^3.4.6",
     "co": "^4.6.0",
+    "mock-stdin": "^0.3.1",
     "node-fetch": "^1.6.3",
     "ramda": "^0.22.1"
   }

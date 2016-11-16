@@ -6,6 +6,29 @@ const fetch    = require('node-fetch')
 const bluebird = require('bluebird')
 const fs       = bluebird.promisifyAll( require('fs') )
 
+// Accepts validation function that will only return
+// the terminal input when it validates to truthy.
+
+// TODO: May also be possible to implement recursively
+// by returning userInput(fn) but is harder to test due to
+// the stdin mock being synchronous. Could put the mock calls in setTimeouts,
+// or nextTick?
+const userInput = fn =>
+  new Promise( (resolve, reject) =>
+    process.stdin.on(
+      'data',
+      function inputHandler (data) {
+        const input = R.dropLast(1, data) // remove line break
+        return fn(input)
+          ? (
+              process.stdin.removeListener('data', inputHandler),
+              resolve(input)
+            )
+          : console.log('Try again!')
+      }
+    )
+  )
+
 const readJson = path =>
   fs.readFileAsync( path ).then( JSON.parse )
 
@@ -45,8 +68,8 @@ const getInitialTokens = (clientId, clientSecret, authCode, redirectUrl) =>
         )
   )
 
-// Necessary as access token only last for an hour.
-const getNewTokens = (clientId, clientSecret, refreshToken) =>
+// Necessary as the access token only lasts for an hour.
+const getFreshTokens = (clientId, clientSecret, refreshToken) =>
   fetch(
     'https://accounts.spotify.com/api/token',
     {
@@ -168,12 +191,13 @@ const getMostRecentlyAdded = (number, songs) =>
   )
 
 module.exports = {
+  userInput,
   toBase64,
   readJson,
   writeJson,
   getRandomIndexes,
   getMostRecentlyAdded,
-  getNewTokens,
+  getFreshTokens,
   getInitialTokens,
   spotifyApi
 }
