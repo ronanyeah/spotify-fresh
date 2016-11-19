@@ -18,7 +18,7 @@ const userInput = fn =>
     process.stdin.on(
       'data',
       function inputHandler (data) {
-        const input = R.dropLast(1, data) // remove line break
+        const input = R.dropLast(1, String(data)) // remove line break
         return fn(input)
           ? (
               process.stdin.removeListener('data', inputHandler),
