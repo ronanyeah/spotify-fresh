@@ -1,51 +1,23 @@
 'use strict'
 
-const R        = require('ramda')
-const co       = require('co')
-const fetch    = require('node-fetch')
-const bluebird = require('bluebird')
-const fs       = bluebird.promisifyAll( require('fs') )
+const {
+  sortBy, uniq, append, takeLast, pipe, toPairs, map, join, prop, concat
+} = require('ramda')
+const { of } = require('fluture')
+const { futch, futchJson } = require('rotools')
 
-// Accepts validation function that will only return
-// the terminal input when it validates to truthy.
-
-// TODO: May also be possible to implement recursively
-// by returning userInput(fn) but is harder to test due to
-// the stdin mock being synchronous. Could put the mock calls in setTimeouts,
-// or nextTick?
-const userInput = fn =>
-  new Promise( (resolve, reject) =>
-    process.stdin.on(
-      'data',
-      function inputHandler (data) {
-        const input = R.dropLast(1, String(data)) // remove line break
-        return fn(input)
-          ? (
-              process.stdin.removeListener('data', inputHandler),
-              resolve(input)
-            )
-          : console.log('Try again!')
-      }
-    )
-  )
-
-const readJson = path =>
-  fs.readFileAsync( path ).then( JSON.parse )
-
-const writeJson = (path, json) =>
-  fs.writeFileAsync( path, JSON.stringify(json) )
+// Object => String
+// TODO May need the encode from idiom repo.
+const objToParamString =
+  pipe(toPairs, map(join('=')), join('&'))
 
 const toBase64 = str =>
   Number( process.versions.node[0] < 6 )
     ? new Buffer(str).toString('base64')
     : Buffer.from(str).toString('base64')
 
-// Object => String
-// TODO May need the encode from idiom repo.
-const objToParamString = R.pipe(R.toPairs, R.map(R.join('=')), R.join('&'))
-
-const getInitialTokens = (clientId, clientSecret, authCode, redirectUrl) =>
-  fetch(
+const getInitialTokens = (clientId, clientSecret, authCode) =>
+  futchJson(
     'https://accounts.spotify.com/api/token',
     {
       method: 'POST',
@@ -56,21 +28,14 @@ const getInitialTokens = (clientId, clientSecret, authCode, redirectUrl) =>
       body: objToParamString({
         grant_type: 'authorization_code',
         code: authCode,
-        redirect_uri: redirectUrl
+        redirect_uri: 'http://localhost:8000/callback'
       })
     }
-  )
-  .then(
-    res => res.status === 200
-      ? res.json()
-      : Promise.reject(
-          Error(`Failed to get refresh token! Status code: ${res.status}`)
-        )
   )
 
 // Necessary as the access token only lasts for an hour.
 const getFreshTokens = (clientId, clientSecret, refreshToken) =>
-  fetch(
+  futchJson(
     'https://accounts.spotify.com/api/token',
     {
       method: 'POST',
@@ -84,20 +49,13 @@ const getFreshTokens = (clientId, clientSecret, refreshToken) =>
       })
     }
   )
-  .then(
-    res => res.status === 200
-      ? res.json()
-      : Promise.reject(
-          Error(`Failed to update tokens! Status code: ${res.status}`)
-        )
-  )
 
 const spotifyApi = (userId, authToken) => (
   {
     getAllSongsFromPlaylist: (playlistId, playlistOwnerId) => {
       // Spotify sends back 100 songs max per request.
-      const get100 = co.wrap(function*(acc) {
-        const newSongs = yield fetch(
+      const get100 = acc =>
+        futchJson(
           'https://api.spotify.com/v1' +
           `/users/${playlistOwnerId}` +
           `/playlists/${playlistId}` +
@@ -108,63 +66,41 @@ const spotifyApi = (userId, authToken) => (
             }
           }
         )
-        .then(
-          res => res.status === 200
-            ? res.json()
-            : Promise.reject(
-                Error(`Failed to retrieve songs! Status code: ${res.status}`)
-              )
+        .map( prop('items') )
+        .chain(
+          newSongs =>
+            // When less than 100 are returned
+            // you have got them all.
+            newSongs.length < 100
+              ? of(concat(acc, newSongs))
+              : get100(concat(acc, newSongs))
         )
-        .then( R.prop('items') )
-
-        const total = R.concat(acc, newSongs)
-
-        // When less than 100 are returned
-        // you have got them all.
-        return newSongs.length < 100
-          ? total
-          : get100(total)
-      })
 
       return get100([])
     },
 
     getPlaylists: _ =>
-      fetch(
+      futchJson(
         'https://api.spotify.com/v1/me/playlists',
         {
           headers: {
             Authorization: `Bearer ${authToken}`
           }
         }
-      )
-      .then(
-        res => res.status === 200
-          ? res.json()
-          : Promise.reject(
-              Error(`Failed to get retrieve playlists! Status code: ${res.status}`)
-            )
       ),
 
     overwritePlaylist: (newUris, playlistId) =>
-      fetch(
+      futch(
         'https://api.spotify.com/v1' +
         `/users/${userId}` +
         `/playlists/${playlistId}` +
-        `/tracks?uris=${R.join(',', newUris)}`,
+        `/tracks?uris=${join(',', newUris)}`,
         {
           method: 'PUT',
           headers: {
             Authorization: `Bearer ${authToken}`
           }
         }
-      )
-      .then(
-        res => res.status === 201
-          ? res
-          : Promise.reject(
-              Error(`Failed to overwrite playlist! Status code: ${res.status}`)
-            )
       )
   }
 )
@@ -175,15 +111,15 @@ const getRandomIndexes = (n, range, res = []) =>
     : getRandomIndexes(
         n,
         range,
-        R.uniq( R.append(Math.floor( Math.random() * range ), res) )
+        uniq( append(Math.floor( Math.random() * range ), res) )
       )
 
 const getMostRecentlyAdded = (number, songs) =>
-  R.takeLast(
+  takeLast(
     number,
-    R.sortBy(
-      R.pipe(
-        R.prop('added_at'),
+    sortBy(
+      pipe(
+        prop('added_at'),
         Date.parse
       ),
       songs
@@ -191,10 +127,6 @@ const getMostRecentlyAdded = (number, songs) =>
   )
 
 module.exports = {
-  userInput,
-  toBase64,
-  readJson,
-  writeJson,
   getRandomIndexes,
   getMostRecentlyAdded,
   getFreshTokens,

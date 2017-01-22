@@ -2,93 +2,137 @@
 
 /* eslint-disable no-console */
 
-const R     = require('ramda')
-const co    = require('co')
-const fetch = require('node-fetch')
+const { map, path, __, props, assoc, prop, pipe, addIndex, join } = require('ramda')
+const { json, futch, input } = require('rotools')
+const { both, of, Future } = require('fluture')
 
 const {
-  readJson, writeJson,
-  userInput, getFreshTokens, spotifyApi,
+  getFreshTokens, spotifyApi,
   getMostRecentlyAdded, getRandomIndexes
 } = require(`${__dirname}/fns.js`)
 
-const exit = msg => { console.log(msg); return process.exit() }
+const exit = msg => (
+  console.log(msg),
+  process.exit()
+)
 
-const logOption = (val, index) => console.log(`${index}) ${val.name}`)
+// [Object] -> String
+const formatOptions =
+  pipe(
+    addIndex(map)(
+      (val, index) =>
+        `\n${index}) ${val.name}`
+    ),
+    join('')
+  )
 
-// Begin execution.
-co(function*() {
+const options = [
+  {
+    name: 'random',
+    fn:
+      songs =>
+        props( getRandomIndexes(20, songs.length), songs )
+  },
+  {
+    name: 'most recently added',
+    fn:
+      songs =>
+        getMostRecentlyAdded(20, songs)
+  }
+]
 
-  const config      = yield readJson(`${__dirname}/config.json`)
-  const savedTokens = yield readJson(`${__dirname}/tokens.json`)
-
-  // Test call to check validity of current access token.
-  const validTokens = yield fetch(
-    'https://api.spotify.com/v1/me',
-    {
-      headers: {
-        Authorization: `Bearer ${savedTokens.access_token}`
+both(
+  json.read(`${__dirname}/config.json`),
+  json.read(`${__dirname}/tokens.json`)
+)
+.chain(
+  ([config, tokens]) =>
+    futch(
+      'https://api.spotify.com/v1/me',
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`
+        }
       }
-    }
-  )
-  .then(
-    res => res.status === 200
-      ? savedTokens
-      : getFreshTokens(
-          config.clientId,
-          config.clientSecret,
-          savedTokens.refresh_token
+    )
+    .chain(
+      res =>
+        res.status === 200
+          ? of(tokens)
+          : getFreshTokens(
+              config.clientId,
+              config.clientSecret,
+              tokens.refresh_token
+            )
+            .chain(
+              newTokens =>
+                // Save the tokens.
+                json.write(
+                  `${__dirname}/tokens.json`,
+                  // Unless a new refresh token has been sent back, retain the old one.
+                  newTokens.refresh_token
+                    ? newTokens
+                    : assoc('refresh_token', tokens.refresh_token, newTokens)
+                )
+                .map( () => newTokens )
+            )
+    )
+    .map(
+      validTokens =>
+        spotifyApi(config.userId, validTokens.access_token)
+    )
+)
+.chain(
+  spotify =>
+    Future.do(function * () {
+
+      const playlists =
+        prop('items', yield spotify.getPlaylists() )
+
+      console.log(
+        '\nSelect source playlist:' +
+        formatOptions(playlists)
+      )
+      const sourcePlaylist = playlists[
+        yield input(prop(__, playlists))
+      ]
+
+      console.log(
+        '\nSelect option:' +
+        formatOptions(options)
+      )
+      const option = options[
+        yield input(prop(__, options))
+      ]
+
+      console.log(
+        '\nSelect target playlist:' +
+        formatOptions(playlists)
+      )
+      const targetPlaylist = playlists[
+        yield input(prop(__, playlists))
+      ]
+
+      const sourceSongs =
+        yield spotify.getAllSongsFromPlaylist(
+          sourcePlaylist.id,
+          sourcePlaylist.owner.id
         )
-  )
 
-  // Save the tokens.
-  writeJson(
-    `${__dirname}/tokens.json`,
-    // Unless a new refresh token has been sent back, retain the old one.
-    R.prop('refresh_token', validTokens)
-      ? validTokens
-      : R.assoc('refresh_token', savedTokens.refresh_token, validTokens)
-  )
+      const urisToApply =
+        map(path(['track', 'uri']), option.fn(sourceSongs))
 
-  const spotify = spotifyApi(config.userId, validTokens.access_token)
-
-  const options = [
-    { name: 'random', fn: songs => R.props( getRandomIndexes(config.count, songs.length), songs ) },
-    { name: 'recent', fn: songs => getMostRecentlyAdded(config.count, songs) }
-  ]
-
-  const playlists =
-    R.prop('items', yield spotify.getPlaylists() )
-
-  console.log('\nSelect source playlist:')
-  playlists.forEach(logOption)
-  const sourcePlaylist = playlists[ yield userInput( R.prop(R.__, playlists) ) ]
-
-  console.log('\nSelect option:')
-  options.forEach(logOption)
-  const option = options[ yield userInput( R.prop(R.__, options) ) ]
-
-  console.log('\nSelect target playlist:')
-  playlists.forEach(logOption)
-  const targetPlaylist = playlists[ yield userInput( R.prop(R.__, playlists) ) ]
-
-  const sourceSongs = yield spotify.getAllSongsFromPlaylist( sourcePlaylist.id, sourcePlaylist.owner.id )
-
-  const urisToApply =
-    R.map(R.path(['track', 'uri']), option.fn(sourceSongs))
-
-  console.log(`\nAre you sure you want to overwrite '${targetPlaylist.name}' with ${config.count} songs from '${sourcePlaylist.name}'? (yes/no)`)
-  return ( yield userInput( txt => txt === 'yes' || txt === 'no' ) ) === 'no'
-    ? '\nAborted!'
-    : yield spotify.overwritePlaylist(
-        urisToApply,
-        targetPlaylist.id
+      console.log(
+        `\nAre you sure you want to overwrite '${targetPlaylist.name}'` +
+        `with 20 ${option.name} songs from '${sourcePlaylist.name}'? (yes/no)`
       )
-      .then(
-        _ =>
-          '\nSuccess!'
-      )
-
-})
-.then(exit)
-.catch(exit)
+      return ( yield input( txt => txt === 'yes' || txt === 'no' ) ) === 'no'
+        ? '\nAborted!'
+        : yield spotify.overwritePlaylist(
+            urisToApply,
+            targetPlaylist.id
+          )
+          .map( () => '\nSuccess!')
+    })
+)
+.fork( exit, exit )
