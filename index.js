@@ -123,7 +123,7 @@ both(
         map(path(['track', 'uri']), option.fn(sourceSongs))
 
       console.log(
-        `\nAre you sure you want to overwrite '${targetPlaylist.name}'` +
+        `\nAre you sure you want to overwrite '${targetPlaylist.name}' ` +
         `with 20 ${option.name} songs from '${sourcePlaylist.name}'? (yes/no)`
       )
       return ( yield input( txt => txt === 'yes' || txt === 'no' ) ) === 'no'
