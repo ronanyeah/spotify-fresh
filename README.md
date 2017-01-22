@@ -1,26 +1,26 @@
-lets you play with your spotify playlists (in a very basic way) using a node cli
+This lets you play with your Spotify playlists (in a very basic way) using a Node.js CLI.
 
-you will need to know your spotify `user id`, and the `client_id` and `client_secret` from a spotify [app](https://developer.spotify.com/my-applications)
+0) First you will need to get your `Client ID` and `Client Secret` from a Spotify [developer application](https://developer.spotify.com/my-applications), and set `http://localhost:8000/callback` as an allowed `Redirect URI`.
 
-0) your `config.json` should look similar to this:
+1) Update the `config.json`, it should look like this:  
 ```
 {
-  "userId":       "pascal_arbez",
+  "userId":       "pascal_arbez", // Your Spotify username.
   "clientId":     "8160d65996d54d379391b7cda895185a",
   "clientSecret": "0c7f57984bd2482b956d6d9bbb37ada4"
 }
 ```
 
-1) run this server:  
-`node -e "require('http').createServer( (req, res) => console.log( req.url.split('code=')[1] ) ).listen(8000)"`
+2) Run this server in your terminal:  
+`node -e "require('http').createServer( req => console.log( '\n' + req.url.split('code=')[1] ) ).listen(8000)"`
 
-2) put `http://localhost:8000/callback` in your spotify app's allowed redirect list
-
-4) visit this url (replacing `<YOUR_CLIENT_ID>`):  
+3) Visit this URL (replacing `<YOUR_CLIENT_ID>`):  
 `https://accounts.spotify.com/authorize?client_id=<YOUR_CLIENT_ID>&response_type=code&redirect_uri=http%3A%2F%2Flocalhost:8000%2Fcallback&scope=playlist-modify-public`
 
-4) pass the auth code printed out on the server console to `refresh.js`:  
-`CODE=<AUTH_CODE> node refresh.js`
+4) Pass the auth code printed out in the terminal to `generateTokens.js`:  
+`CODE=<AUTH_CODE> node generateTokens.js`
 
-5) your tokens have been written to disk as `tokens.json` and you can now use the cli app:  
-`node index.js`
+5) Your tokens have been written to disk as `tokens.json` and you can now use the CLI app:  
+`npm start`
+
+NOTE: The app will refresh the tokens itself if necessary, so these steps need only be done once.
