@@ -1,10 +1,10 @@
 'use strict'
 
 const {
-  sortBy, uniq, append, takeLast, pipe, toPairs, map, join, prop, concat
+  __, addIndex, sortBy, uniq, append, takeLast, pipe, toPairs, map, join, prop, concat
 } = require('ramda')
 const { of } = require('fluture')
-const { futch, futchJson } = require('rotools')
+const { futch, futchJson, input } = require('rotools')
 
 // Object => String
 // TODO May need the encode from idiom repo.
@@ -15,6 +15,31 @@ const toBase64 = str =>
   Number( process.versions.node[0] < 6 )
     ? new Buffer(str).toString('base64')
     : Buffer.from(str).toString('base64')
+
+// [Object] -> String
+const formatOptions =
+  pipe(
+    addIndex(map)(
+      (val, index) =>
+        `\n${index}) ${val.name}`
+    ),
+    join('')
+  )
+
+// [Any] -> String
+const selectFrom =
+  xs =>
+    () =>
+      input(prop(__, xs))
+      .map(prop(__, xs))
+
+// String -> Future Err _
+const log = msg =>
+  of()
+  .map(
+    () =>
+      console.log(msg)
+  )
 
 const getInitialTokens = (clientId, clientSecret, authCode) =>
   futchJson(
@@ -79,7 +104,7 @@ const spotifyApi = (userId, authToken) => (
       return get100([])
     },
 
-    getPlaylists: _ =>
+    getPlaylists:
       futchJson(
         'https://api.spotify.com/v1/me/playlists',
         {
@@ -127,6 +152,9 @@ const getMostRecentlyAdded = (number, songs) =>
   )
 
 module.exports = {
+  selectFrom,
+  log,
+  formatOptions,
   getRandomIndexes,
   getMostRecentlyAdded,
   getFreshTokens,

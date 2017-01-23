@@ -2,29 +2,19 @@
 
 /* eslint-disable no-console */
 
-const { map, path, __, props, assoc, prop, pipe, addIndex, join } = require('ramda')
+const { map, path, props, assoc, prop, pipe } = require('ramda')
 const { json, futch, input } = require('rotools')
-const { both, of, Future } = require('fluture')
+const { parallel, both, of } = require('fluture')
 
 const {
-  getFreshTokens, spotifyApi,
-  getMostRecentlyAdded, getRandomIndexes
+  getFreshTokens, spotifyApi, log, formatOptions,
+  getMostRecentlyAdded, getRandomIndexes, selectFrom
 } = require(`${__dirname}/fns.js`)
 
 const exit = msg => (
   console.log(msg),
   process.exit()
 )
-
-// [Object] -> String
-const formatOptions =
-  pipe(
-    addIndex(map)(
-      (val, index) =>
-        `\n${index}) ${val.name}`
-    ),
-    join('')
-  )
 
 const options = [
   {
@@ -41,6 +31,7 @@ const options = [
   }
 ]
 
+// START EXECUTION
 both(
   json.read(`${__dirname}/config.json`),
   json.read(`${__dirname}/tokens.json`)
@@ -84,55 +75,66 @@ both(
 )
 .chain(
   spotify =>
-    Future.do(function * () {
+    spotify.getPlaylists
+    .map( prop('items') )
+    .chain(
+      playlists =>
+        parallel(
+          1,
+          [
+            log(
+              '\nSelect source playlist:' +
+              formatOptions(playlists)
+            )
+            .chain(selectFrom(playlists)),
 
-      const playlists =
-        prop('items', yield spotify.getPlaylists() )
+            log(
+              '\nSelect option:' +
+              formatOptions(options)
+            )
+            .chain(selectFrom(options)),
 
-      console.log(
-        '\nSelect source playlist:' +
-        formatOptions(playlists)
-      )
-      const sourcePlaylist = playlists[
-        yield input(prop(__, playlists))
-      ]
-
-      console.log(
-        '\nSelect option:' +
-        formatOptions(options)
-      )
-      const option = options[
-        yield input(prop(__, options))
-      ]
-
-      console.log(
-        '\nSelect target playlist:' +
-        formatOptions(playlists)
-      )
-      const targetPlaylist = playlists[
-        yield input(prop(__, playlists))
-      ]
-
-      const sourceSongs =
-        yield spotify.getAllSongsFromPlaylist(
-          sourcePlaylist.id,
-          sourcePlaylist.owner.id
+            log(
+              '\nSelect target playlist:' +
+              formatOptions(playlists)
+            )
+            .chain(selectFrom(playlists))
+          ]
         )
-
-      const urisToApply =
-        map(path(['track', 'uri']), option.fn(sourceSongs))
-
-      console.log(
-        `\nAre you sure you want to overwrite '${targetPlaylist.name}' ` +
-        `with 20 ${option.name} songs from '${sourcePlaylist.name}'? (yes/no)`
-      )
-      return ( yield input( txt => txt === 'yes' || txt === 'no' ) ) === 'no'
-        ? '\nAborted!'
-        : yield spotify.overwritePlaylist(
-            urisToApply,
-            targetPlaylist.id
+    )
+    .chain(
+      ([sourcePlaylist, option, targetPlaylist]) =>
+        spotify.getAllSongsFromPlaylist(
+          sourcePlaylist.id,
+          path(['owner', 'id'], sourcePlaylist)
+        )
+        .map(
+          pipe(
+            option.fn,
+            map(path(['track', 'uri']))
           )
-          .map( () => '\nSuccess!')
-    })
+        )
+        .chain(
+          urisToApply =>
+            log(
+              `\nAre you sure you want to overwrite '${targetPlaylist.name}' ` +
+              `with 20 ${option.name} songs from '${sourcePlaylist.name}'? (yes/no)`
+            )
+            .chain(
+              () =>
+                input( txt => txt === 'yes' || txt === 'no' )
+                .chain(
+                  selection =>
+                    selection === 'no'
+                      ? of('\nAborted!')
+                      : spotify.overwritePlaylist(
+                          urisToApply,
+                          targetPlaylist.id
+                        )
+                        .map( () => '\nSuccess!')
+                )
+            )
+        )
+    )
 )
 .fork( exit, exit )
