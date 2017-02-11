@@ -72,8 +72,6 @@ const selectTasks =
       )
       .map(fromPairs)
 
-const letIn = () => 0
-
 // START EXECUTION
 both(
   json.read(`${__dirname}/config.json`),
