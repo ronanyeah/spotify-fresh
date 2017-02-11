@@ -2,7 +2,7 @@
 
 /* eslint-disable no-console */
 
-const { map, path, props, assoc, prop, pipe } = require('ramda')
+const { fromPairs, map, path, props, assoc, prop, pipe } = require('ramda')
 const { json, futch, input } = require('rotools')
 const { parallel, both, of } = require('fluture')
 
@@ -16,7 +16,14 @@ const exit = msg => (
   process.exit()
 )
 
-const options = [
+// ( a -> Future Err b ) -> a -> Future Err a
+const tapChain =
+  f =>
+    x =>
+      f(x)
+      .map( () => x )
+
+const transforms = [
   {
     name: 'random',
     fn:
@@ -30,6 +37,42 @@ const options = [
         getMostRecentlyAdded(20, songs)
   }
 ]
+
+// String -> a -> (String, a)
+const makeTuple = tag => value => [tag, value]
+
+// [Transform] -> [Playlist] -> Object
+const selectTasks =
+  transforms =>
+    playlists =>
+      parallel(
+        1,
+        [
+          log(
+            '\nSelect source playlist:' +
+            formatOptions(playlists)
+          )
+          .chain(selectFrom(playlists))
+          .map(makeTuple('sourcePlaylist')),
+
+          log(
+            '\nSelect option:' +
+            formatOptions(transforms)
+          )
+          .chain(selectFrom(transforms))
+          .map(makeTuple('option')),
+
+          log(
+            '\nSelect target playlist:' +
+            formatOptions(playlists)
+          )
+          .chain(selectFrom(playlists))
+          .map(makeTuple('targetPlaylist'))
+        ]
+      )
+      .map(fromPairs)
+
+const letIn = () => 0
 
 // START EXECUTION
 both(
@@ -56,16 +99,17 @@ both(
               tokens.refresh_token
             )
             .chain(
-              newTokens =>
-                // Save the tokens.
-                json.write(
-                  `${__dirname}/tokens.json`,
-                  // Unless a new refresh token has been sent back, retain the old one.
-                  newTokens.refresh_token
-                    ? newTokens
-                    : assoc('refresh_token', tokens.refresh_token, newTokens)
-                )
-                .map( () => newTokens )
+              tapChain(
+                newTokens =>
+                  // Save the tokens.
+                  json.write(
+                    `${__dirname}/tokens.json`,
+                    // Unless a new refresh token has been sent back, retain the old one.
+                    newTokens.refresh_token
+                      ? newTokens
+                      : assoc('refresh_token', tokens.refresh_token, newTokens)
+                  )
+              )
             )
     )
     .map(
@@ -74,37 +118,13 @@ both(
     )
 )
 .chain(
-  spotify =>
-    spotify.getPlaylists
+  ({getPlaylists, getAllSongsFromPlaylist, overwritePlaylist}) =>
+    getPlaylists
     .map( prop('items') )
+    .chain(selectTasks(transforms))
     .chain(
-      playlists =>
-        parallel(
-          1,
-          [
-            log(
-              '\nSelect source playlist:' +
-              formatOptions(playlists)
-            )
-            .chain(selectFrom(playlists)),
-
-            log(
-              '\nSelect option:' +
-              formatOptions(options)
-            )
-            .chain(selectFrom(options)),
-
-            log(
-              '\nSelect target playlist:' +
-              formatOptions(playlists)
-            )
-            .chain(selectFrom(playlists))
-          ]
-        )
-    )
-    .chain(
-      ([sourcePlaylist, option, targetPlaylist]) =>
-        spotify.getAllSongsFromPlaylist(
+      ({sourcePlaylist, option, targetPlaylist}) =>
+        getAllSongsFromPlaylist(
           sourcePlaylist.id,
           path(['owner', 'id'], sourcePlaylist)
         )
@@ -127,7 +147,7 @@ both(
                   selection =>
                     selection === 'no'
                       ? of('\nAborted!')
-                      : spotify.overwritePlaylist(
+                      : overwritePlaylist(
                           urisToApply,
                           targetPlaylist.id
                         )
