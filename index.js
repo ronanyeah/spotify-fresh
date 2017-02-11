@@ -2,12 +2,12 @@
 
 /* eslint-disable no-console */
 
-const { fromPairs, map, path, props, assoc, prop, pipe } = require('ramda')
+const { tap, fromPairs, map, path, props, assoc, prop, pipe } = require('ramda')
 const { json, futch, input } = require('rotools')
-const { parallel, both, of } = require('fluture')
+const { reject, parallel, of } = require('fluture')
 
 const {
-  getFreshTokens, spotifyApi, log, formatOptions,
+  getFreshTokens, spotifyApi, formatOptions,
   getMostRecentlyAdded, getRandomIndexes, selectFrom
 } = require(`${__dirname}/fns.js`)
 
@@ -41,6 +41,9 @@ const transforms = [
 // String -> a -> (String, a)
 const makeTuple = tag => value => [tag, value]
 
+// [Song] -> String
+const getUri = path(['track', 'uri'])
+
 // [Transform] -> [Playlist] -> Object
 const selectTasks =
   transforms =>
@@ -48,71 +51,85 @@ const selectTasks =
       parallel(
         1,
         [
-          log(
+          selectFrom(
             '\nSelect source playlist:' +
-            formatOptions(playlists)
+            formatOptions(playlists),
+            playlists
           )
-          .chain(selectFrom(playlists))
           .map(makeTuple('sourcePlaylist')),
 
-          log(
+          selectFrom(
             '\nSelect option:' +
-            formatOptions(transforms)
+            formatOptions(transforms),
+            transforms
           )
-          .chain(selectFrom(transforms))
           .map(makeTuple('option')),
 
-          log(
+          selectFrom(
             '\nSelect target playlist:' +
-            formatOptions(playlists)
+            formatOptions(playlists),
+            playlists
           )
-          .chain(selectFrom(playlists))
           .map(makeTuple('targetPlaylist'))
         ]
       )
       .map(fromPairs)
 
-// START EXECUTION
-both(
-  json.read(`${__dirname}/config.json`),
-  json.read(`${__dirname}/tokens.json`)
-)
-.chain(
-  ([config, tokens]) =>
-    futch(
-      'https://api.spotify.com/v1/me',
-      {
-        headers: {
-          Authorization: `Bearer ${tokens.access_token}`
-        }
+// String -> Future Number String
+const checkTokenValidity = accessToken =>
+  futch(
+    'https://api.spotify.com/v1/me',
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
       }
+    }
+  )
+  .chain(
+    res =>
+      res.status === 200
+        ? of(accessToken)
+        : reject(res.status)
+  )
+
+const updateTokens =
+  (clientId, clientSecret, refreshToken) =>
+    getFreshTokens(
+      clientId,
+      clientSecret,
+      refreshToken
     )
     .chain(
-      res =>
-        res.status === 200
-          ? of(tokens)
-          : getFreshTokens(
-              config.clientId,
-              config.clientSecret,
-              tokens.refresh_token
-            )
-            .chain(
-              tapChain(
-                newTokens =>
-                  // Save the tokens.
-                  json.write(
-                    `${__dirname}/tokens.json`,
-                    // Unless a new refresh token has been sent back, retain the old one.
-                    newTokens.refresh_token
-                      ? newTokens
-                      : assoc('refresh_token', tokens.refresh_token, newTokens)
-                  )
-              )
-            )
+      // Save the tokens.
+      tapChain(
+        newTokens =>
+          json.write(
+            `${__dirname}/tokens.json`,
+            // Unless a new refresh token has been sent back, retain the old one.
+            newTokens.refresh_token
+              ? newTokens
+              : assoc('refresh_token', refreshToken, newTokens)
+          )
+      )
     )
-    .map(
-      validTokens =>
-        spotifyApi(config.userId, validTokens.access_token)
+
+// START EXECUTION
+json.read(`${__dirname}/config.json`)
+.chain(
+  ({clientId, clientSecret, userId}) =>
+    json.read(`${__dirname}/tokens.json`)
+    .chain(
+      ({refresh_token, access_token}) =>
+        checkTokenValidity(access_token)
+        .chainRej(
+          statusCode =>
+            updateTokens(clientId, clientSecret, refresh_token)
+            .map(prop('access_token'))
+        )
+        .map(
+          accessToken =>
+            spotifyApi(userId, accessToken)
+        )
     )
 )
 .chain(
@@ -129,28 +146,28 @@ both(
         .map(
           pipe(
             option.fn,
-            map(path(['track', 'uri']))
+            map(getUri)
           )
         )
-        .chain(
-          urisToApply =>
-            log(
+        .map(tap(
+          () =>
+            console.log(
               `\nAre you sure you want to overwrite '${targetPlaylist.name}' ` +
               `with 20 ${option.name} songs from '${sourcePlaylist.name}'? (yes/no)`
             )
+        ))
+        .chain(
+          urisToApply =>
+            input( txt => txt === 'yes' || txt === 'no' )
             .chain(
-              () =>
-                input( txt => txt === 'yes' || txt === 'no' )
-                .chain(
-                  selection =>
-                    selection === 'no'
-                      ? of('\nAborted!')
-                      : overwritePlaylist(
-                          urisToApply,
-                          targetPlaylist.id
-                        )
-                        .map( () => '\nSuccess!')
-                )
+              selection =>
+                selection === 'no'
+                  ? of('\nAborted!')
+                  : overwritePlaylist(
+                      urisToApply,
+                      targetPlaylist.id
+                    )
+                    .map( () => '\nSuccess!')
             )
         )
     )

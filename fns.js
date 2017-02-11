@@ -1,7 +1,7 @@
 'use strict'
 
 const {
-  __, addIndex, sortBy, uniq, append, takeLast, pipe, toPairs, map, join, prop, concat
+  curry, __, addIndex, sortBy, uniq, append, takeLast, pipe, toPairs, map, join, prop, concat
 } = require('ramda')
 const { of } = require('fluture')
 const { futch, futchJson, input } = require('rotools')
@@ -26,20 +26,14 @@ const formatOptions =
     join('')
   )
 
-// [Any] -> String
-const selectFrom =
-  xs =>
-    () =>
-      input(prop(__, xs))
-      .map(prop(__, xs))
-
-// String -> Future Err _
-const log = msg =>
-  of()
-  .map(
-    () =>
-      console.log(msg)
-  )
+// [a] -> String
+const selectFrom = curry(
+  (msg, xs) =>
+    of()
+    .map( () => console.log(msg) )
+    .chain( () => input(prop(__, xs)) )
+    .map(prop(__, xs))
+)
 
 const getInitialTokens = (clientId, clientSecret, authCode) =>
   futchJson(
@@ -153,7 +147,6 @@ const getMostRecentlyAdded = (number, songs) =>
 
 module.exports = {
   selectFrom,
-  log,
   formatOptions,
   getRandomIndexes,
   getMostRecentlyAdded,
